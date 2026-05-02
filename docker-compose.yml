@@ -1,0 +1,14 @@
+# One-command MongoDB for the project. Run with `docker compose up -d`.
+# Local-only, no auth -- fine for a class project on your own machine.
+services:
+  mongo:
+    image: mongo:7
+    container_name: cs210_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

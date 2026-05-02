@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Data -- 258 MB, not pushing this to GitHub
+data/*.gz
+data/*.jsonl
+data/tinydb_store.json
+
+# Generated outputs
+output/*.html
+output/*.csv
+output/*.png
+output/*.json
+!output/.gitkeep
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
