@@ -1,17 +1,9 @@
-"""
-Plotly figure builders.
+"""Plotly figure builders shared by the dashboard and the static report.
 
-Each function takes a scored DataFrame and returns a ``plotly.graph_objects.Figure``.
-Both the Streamlit dashboard and the static-HTML report import these, so any
-visual change made here updates both surfaces.
-
-Style note: we keep colors consistent across charts -- negative is red,
-neutral is gray, positive is green -- so the reader can scan multiple
-charts without re-decoding the palette each time.
+negative=red, neutral=gray, positive=green across every chart
+so the reader doesn't re-decode the palette each time.
 """
 from __future__ import annotations
-
-from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -20,21 +12,21 @@ import plotly.graph_objects as go
 
 from . import config
 
-# Shared palette. Same colors across every chart.
 POLARITY_COLORS = {
-    "negative": "#d62728",  # red
-    "neutral": "#7f7f7f",   # gray
-    "positive": "#2ca02c",  # green
+    "negative": "#d62728",
+    "neutral":  "#7f7f7f",
+    "positive": "#2ca02c",
 }
 
 POLARITY_ORDER = ["negative", "neutral", "positive"]
 
 
-# ------------------------------------------------------------------ basics
+def _reviews_mentioning(df: pd.DataFrame, aspect: str) -> pd.DataFrame:
+    return df[df["aspects"].apply(lambda al: aspect in al)]
 
 
 def fig_rating_distribution(df: pd.DataFrame) -> go.Figure:
-    """Bar chart of star-rating counts. Establishes class imbalance up front."""
+    """Bar chart of star-rating counts."""
     counts = df["rating"].value_counts().sort_index()
     fig = px.bar(
         x=counts.index.astype(int),
@@ -65,27 +57,24 @@ def fig_polarity_distribution(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-# ------------------------------------------------------------------ agreement
-
-
 def fig_confusion_matrix(df: pd.DataFrame) -> go.Figure:
-    """Heatmap: predicted polarity vs star-bucketed actual polarity."""
+    """Heatmap of predicted polarity vs star-bucketed actual polarity."""
     labels = POLARITY_ORDER
-    cm = (
+    confusion_df = (
         pd.crosstab(df["actual_polarity"], df["predicted_polarity"])
         .reindex(index=labels, columns=labels, fill_value=0)
     )
-    # Row-normalize so we read it as "of all reviews actually X, what fraction
-    # were predicted Y" -- much more useful than raw counts when classes are
-    # imbalanced.
-    cm_norm = cm.div(cm.sum(axis=1).replace(0, 1), axis=0)
+    # Row-normalize: each cell reads as "of all actual-X reviews, Y% were predicted Z."
+    norm = confusion_df.div(confusion_df.sum(axis=1).replace(0, 1), axis=0)
+
     annotations = [
-        [f"{cm.iloc[i,j]:,}<br>{cm_norm.iloc[i,j]:.1%}" for j in range(len(labels))]
-        for i in range(len(labels))
+        [f"{confusion_df.iloc[r, c]:,}<br>{norm.iloc[r, c]:.1%}" for c in range(len(labels))]
+        for r in range(len(labels))
     ]
+
     fig = go.Figure(
         data=go.Heatmap(
-            z=cm_norm.values,
+            z=norm.values,
             x=labels,
             y=labels,
             colorscale="Blues",
@@ -105,11 +94,9 @@ def fig_confusion_matrix(df: pd.DataFrame) -> go.Figure:
 
 
 def fig_sentiment_vs_rating(df: pd.DataFrame, max_points: int = 8000) -> go.Figure:
-    """Scatter: VADER compound score against actual star rating.
+    """Scatter: VADER compound score vs actual star rating.
 
-    Includes a small horizontal jitter on the x (ratings are integer) to
-    avoid every point landing on five vertical lines. Sub-samples for
-    rendering speed.
+    Adds horizontal jitter so points don't collapse onto five vertical lines.
     """
     if len(df) > max_points:
         df = df.sample(max_points, random_state=0)
@@ -125,49 +112,43 @@ def fig_sentiment_vs_rating(df: pd.DataFrame, max_points: int = 8000) -> go.Figu
         labels={"x": "Star rating (jittered)", "y": "VADER compound score", "color": "Polarity"},
         title="VADER Compound Score vs Star Rating",
     )
-    # Reference line: perfect linear mapping rating <-> compound.
     fig.add_hline(y=0, line_dash="dot", line_color="black", opacity=0.4)
     return fig
 
 
-# ------------------------------------------------------------------ aspects
-
-
 def fig_aspect_polarity_heatmap(df: pd.DataFrame) -> go.Figure:
-    """Heatmap of aspect category × predicted polarity, normalized per-aspect.
+    """Heatmap of aspect × polarity (row-normalized).
 
-    Reading: a row tells you, of the reviews that mentioned <aspect>, what
-    fraction were positive / neutral / negative. Useful for spotting
-    aspects that disproportionately attract complaints.
+    Each row shows what fraction of reviews mentioning an aspect were
+    positive / neutral / negative — useful for spotting complaint-heavy areas.
     """
     rows = []
     for aspect in config.ASPECT_KEYWORDS:
-        mask = df["aspects"].apply(lambda al, a=aspect: a in al)
-        sub = df[mask]
+        sub = _reviews_mentioning(df, aspect)
         if len(sub) == 0:
-            rows.append((aspect, 0, 0, 0, 0))
+            rows.append((aspect, 0, 0.0, 0.0, 0.0))
             continue
-        d = sub["predicted_polarity"].value_counts(normalize=True)
-        rows.append(
-            (
-                aspect,
-                int(len(sub)),
-                float(d.get("negative", 0)),
-                float(d.get("neutral", 0)),
-                float(d.get("positive", 0)),
-            )
-        )
-    adf = pd.DataFrame(rows, columns=["aspect", "n", "negative", "neutral", "positive"])
-    z = adf[["negative", "neutral", "positive"]].values
+        shares = sub["predicted_polarity"].value_counts(normalize=True)
+        rows.append((
+            aspect,
+            len(sub),
+            float(shares.get("negative", 0)),
+            float(shares.get("neutral", 0)),
+            float(shares.get("positive", 0)),
+        ))
+
+    aspect_df = pd.DataFrame(rows, columns=["aspect", "n", "negative", "neutral", "positive"])
+    z = aspect_df[["negative", "neutral", "positive"]].values
     text = [
-        [f"{adf.iloc[i]['n']:,} reviews<br>{z[i][j]:.1%}" for j in range(3)]
-        for i in range(len(adf))
+        [f"{aspect_df.iloc[r]['n']:,} reviews<br>{z[r][c]:.1%}" for c in range(3)]
+        for r in range(len(aspect_df))
     ]
+
     fig = go.Figure(
         data=go.Heatmap(
             z=z,
             x=POLARITY_ORDER,
-            y=adf["aspect"],
+            y=aspect_df["aspect"],
             colorscale="RdYlGn",
             zmid=0.33,
             text=text,
@@ -186,36 +167,31 @@ def fig_aspect_polarity_heatmap(df: pd.DataFrame) -> go.Figure:
 
 def fig_aspect_volume(df: pd.DataFrame) -> go.Figure:
     """Bar chart of how many reviews mentioned each aspect."""
-    counts = {
-        aspect: int(df["aspects"].apply(lambda al, a=aspect: a in al).sum())
-        for aspect in config.ASPECT_KEYWORDS
-    }
-    s = pd.Series(counts).sort_values(ascending=True)
+    counts = {aspect: len(_reviews_mentioning(df, aspect)) for aspect in config.ASPECT_KEYWORDS}
+    volume = pd.Series(counts).sort_values(ascending=True)
     fig = px.bar(
-        x=s.values,
-        y=s.index,
+        x=volume.values,
+        y=volume.index,
         orientation="h",
         labels={"x": "Reviews mentioning aspect", "y": "Aspect"},
         title="Aspect Mention Volume",
-        text=s.values,
+        text=volume.values,
     )
     fig.update_traces(textposition="outside", marker_color="#1f77b4")
     return fig
 
 
-# ------------------------------------------------------------------ time
-
-
 def fig_sentiment_over_time(df: pd.DataFrame) -> go.Figure:
-    """Monthly average VADER compound score with review volume on a 2nd axis."""
+    """Monthly average VADER compound score with review volume on a second axis."""
     monthly = (
         df.groupby("year_month")
         .agg(avg_compound=("compound", "mean"), n=("compound", "size"))
         .reset_index()
         .sort_values("year_month")
     )
-    # Drop any month with very few reviews -- noisy and clutters the chart.
+    # Drop months with very few reviews — they're noisy and clutter the chart.
     monthly = monthly[monthly["n"] >= 30]
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -246,12 +222,9 @@ def fig_sentiment_over_time(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-# ------------------------------------------------------------------ products
-
-
 def fig_top_complaint_products(df: pd.DataFrame, top_n: int = 10) -> go.Figure:
-    """Top-N products by negative-review count (must have >= 5 reviews)."""
-    by_product = (
+    """Top-N products by negative review count (minimum 5 reviews per product)."""
+    products = (
         df.groupby("parent_asin")
         .agg(
             n=("rating", "size"),
@@ -260,12 +233,12 @@ def fig_top_complaint_products(df: pd.DataFrame, top_n: int = 10) -> go.Figure:
         )
         .reset_index()
     )
-    by_product = by_product[by_product["n"] >= 5]
-    by_product = by_product.sort_values("n_negative", ascending=False).head(top_n)
-    by_product["label"] = by_product["parent_asin"] + " (n=" + by_product["n"].astype(str) + ")"
+    products = products[products["n"] >= 5]
+    products = products.sort_values("n_negative", ascending=False).head(top_n)
+    products["label"] = products["parent_asin"] + " (n=" + products["n"].astype(str) + ")"
 
     fig = px.bar(
-        by_product[::-1],
+        products[::-1],
         x="n_negative",
         y="label",
         orientation="h",
@@ -278,9 +251,6 @@ def fig_top_complaint_products(df: pd.DataFrame, top_n: int = 10) -> go.Figure:
     )
     fig.update_traces(textposition="outside")
     return fig
-
-
-# ------------------------------------------------------------------ verified
 
 
 def fig_verified_vs_not(df: pd.DataFrame) -> go.Figure:
@@ -298,32 +268,27 @@ def fig_verified_vs_not(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-# ------------------------------------------------------------------ word clouds
-
-
 def wordcloud_for(
     df: pd.DataFrame,
     polarity: str = "negative",
     aspect: str | None = None,
     max_words: int = 100,
 ):
-    """Generate a wordcloud (returns matplotlib Figure, not plotly).
-
-    The wordcloud package draws PIL images directly. The Streamlit dashboard
-    embeds these as PNGs.
-    """
+    """Generate a wordcloud (returns a WordCloud object, not a Plotly figure)."""
     from wordcloud import STOPWORDS, WordCloud
 
     sub = df[df["predicted_polarity"] == polarity]
     if aspect:
-        sub = sub[sub["aspects"].apply(lambda al, a=aspect: a in al)]
+        sub = _reviews_mentioning(sub, aspect)
     if len(sub) == 0:
         return None
-    text = " ".join(sub["text"].fillna("").astype(str).tolist())
+
+    text = " ".join(sub["text"].fillna("").astype(str))
     if not text.strip():
         return None
+
     stopwords = set(STOPWORDS) | {"product", "one", "thing", "got", "amazon", "br"}
-    wc = WordCloud(
+    return WordCloud(
         width=900,
         height=420,
         background_color="white",
@@ -331,4 +296,3 @@ def wordcloud_for(
         stopwords=stopwords,
         colormap="Reds" if polarity == "negative" else "Greens",
     ).generate(text)
-    return wc

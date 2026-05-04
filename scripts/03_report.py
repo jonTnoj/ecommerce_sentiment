@@ -1,10 +1,7 @@
-"""
-Stage 3: generate a static, self-contained HTML report.
+"""Stage 3: generate a static, self-contained HTML report.
 
-Reads the scored CSV from stage 2, builds every Plotly figure from
-`src.viz`, and stitches them together into one ``output/report.html``
-file plus a few PNG word clouds. Useful for graders who don't want to
-spin up Streamlit and for the demo video.
+Reads the scored CSV from stage 2, builds every Plotly figure, and writes
+a single output/report.html file plus PNG word clouds.
 """
 from __future__ import annotations
 
@@ -43,8 +40,7 @@ def _save_wordclouds(df: pd.DataFrame, out_dir: Path) -> list[Path]:
         wc.to_file(str(path))
         saved.append(path)
 
-    # Per-aspect negative wordclouds -- this is the most actionable view:
-    # "what specifically are people complaining about regarding shipping?"
+    # Per-aspect negative wordclouds — the most actionable view for complaints.
     for aspect in config.ASPECT_KEYWORDS:
         wc = viz.wordcloud_for(df, polarity="negative", aspect=aspect)
         if wc is None:
@@ -64,15 +60,17 @@ def _metrics_html() -> str:
     metrics = json.loads(config.METRICS_JSON.read_text())
     cls = metrics["classification"]
     reg = metrics["regression"]
-    rows = []
-    rows.append(("Total reviews scored", f"{metrics['n_reviews']:,}"))
-    rows.append(("MAE (predicted stars vs actual)", f"{reg['mae']:.3f}"))
-    rows.append(("RMSE", f"{reg['rmse']:.3f}"))
-    rows.append(("3-class polarity accuracy", f"{cls['accuracy']:.3f}"))
-    rows.append(("Macro F1", f"{cls['macro_avg']['f1-score']:.3f}"))
-    rows.append(("Weighted F1", f"{cls['weighted_avg']['f1-score']:.3f}"))
-    table = "<table class='metrics'>" + "".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows
+
+    rows = [
+        ("Total reviews scored", f"{metrics['n_reviews']:,}"),
+        ("MAE (predicted stars vs actual)", f"{reg['mae']:.3f}"),
+        ("RMSE", f"{reg['rmse']:.3f}"),
+        ("3-class polarity accuracy", f"{cls['accuracy']:.3f}"),
+        ("Macro F1", f"{cls['macro_avg']['f1-score']:.3f}"),
+        ("Weighted F1", f"{cls['weighted_avg']['f1-score']:.3f}"),
+    ]
+    summary_table = "<table class='metrics'>" + "".join(
+        f"<tr><th>{label}</th><td>{value}</td></tr>" for label, value in rows
     ) + "</table>"
 
     per_class_rows = "".join(
@@ -88,7 +86,7 @@ def _metrics_html() -> str:
         "<th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Support</th>"
         "</tr></thead><tbody>" + per_class_rows + "</tbody></table>"
     )
-    return table + "<h3>Per-class breakdown</h3>" + per_class
+    return summary_table + "<h3>Per-class breakdown</h3>" + per_class
 
 
 def build_report() -> Path:
@@ -97,31 +95,33 @@ def build_report() -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     figures = [
-        ("Star Rating Distribution", viz.fig_rating_distribution(df)),
-        ("VADER Polarity Distribution", viz.fig_polarity_distribution(df)),
-        ("Confusion Matrix", viz.fig_confusion_matrix(df)),
-        ("Sentiment vs Rating", viz.fig_sentiment_vs_rating(df)),
-        ("Aspect Mention Volume", viz.fig_aspect_volume(df)),
-        ("Aspect × Polarity Heatmap", viz.fig_aspect_polarity_heatmap(df)),
-        ("Sentiment Over Time", viz.fig_sentiment_over_time(df)),
-        ("Top Complaint Products", viz.fig_top_complaint_products(df)),
-        ("Verified vs Unverified", viz.fig_verified_vs_not(df)),
+        ("Star Rating Distribution",     viz.fig_rating_distribution(df)),
+        ("VADER Polarity Distribution",  viz.fig_polarity_distribution(df)),
+        ("Confusion Matrix",             viz.fig_confusion_matrix(df)),
+        ("Sentiment vs Rating",          viz.fig_sentiment_vs_rating(df)),
+        ("Aspect Mention Volume",        viz.fig_aspect_volume(df)),
+        ("Aspect × Polarity Heatmap",   viz.fig_aspect_polarity_heatmap(df)),
+        ("Sentiment Over Time",          viz.fig_sentiment_over_time(df)),
+        ("Top Complaint Products",       viz.fig_top_complaint_products(df)),
+        ("Verified vs Unverified",       viz.fig_verified_vs_not(df)),
     ]
 
+    # Only include Plotly.js once — in the first figure block.
+    first_title = figures[0][0]
     fig_blocks = []
     for title, fig in figures:
         fig_html = pio.to_html(
             fig,
-            include_plotlyjs="cdn" if title == figures[0][0] else False,
+            include_plotlyjs="cdn" if title == first_title else False,
             full_html=False,
         )
         fig_blocks.append(f"<section><h2>{title}</h2>{fig_html}</section>")
 
-    saved_clouds = _save_wordclouds(df, out_dir)
+    cloud_paths = _save_wordclouds(df, out_dir)
     cloud_html = "".join(
         f"<figure><img src='{p.name}' alt='{p.stem}'>"
         f"<figcaption>{p.stem.replace('_', ' ').title()}</figcaption></figure>"
-        for p in saved_clouds
+        for p in cloud_paths
     )
 
     html = f"""<!doctype html>
@@ -146,7 +146,7 @@ def build_report() -> Path:
 </head>
 <body>
 <h1>E-commerce Review Sentiment Analysis</h1>
-<p class="header-meta">CS 210 final-project report -- generated by
+<p class="header-meta">CS 210 final-project report — generated by
 <code>scripts/03_report.py</code> from <code>output/scored_reviews.csv</code>.</p>
 
 <section>
@@ -159,7 +159,7 @@ def build_report() -> Path:
 <section>
 <h2>Word Clouds</h2>
 <p>Most-frequent terms within negatively-scored reviews (overall and per
-aspect category) -- what people are actually complaining about.</p>
+aspect category) — what people are actually complaining about.</p>
 {cloud_html}
 </section>
 
@@ -172,5 +172,5 @@ aspect category) -- what people are actually complaining about.</p>
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    p = build_report()
-    print(f"\nReport written to: {p}")
+    report_path = build_report()
+    print(f"\nReport written to: {report_path}")

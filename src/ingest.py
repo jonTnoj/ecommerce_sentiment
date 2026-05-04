@@ -1,12 +1,4 @@
-"""
-Ingestion: gzipped JSONL  ->  stratified sample  ->  document store.
-
-The raw Appliances dataset has ~2.13M reviews and is heavily skewed toward
-5-star ratings (~70%). Working on the full file is slow and produces
-imbalanced metrics, so we draw a stratified sample by star rating using
-reservoir sampling -- this gives an unbiased per-class sample in a single
-pass without having to load the whole file into memory.
-"""
+"""Ingest gzipped JSONL reviews into the document store via stratified sampling."""
 from __future__ import annotations
 
 import gzip
@@ -21,28 +13,24 @@ from .db import ReviewStore
 
 log = logging.getLogger(__name__)
 
+STAR_RATINGS = (1.0, 2.0, 3.0, 4.0, 5.0)
+
 
 def _stream_jsonl(path: Path) -> Iterator[dict]:
-    """Yield one parsed record per line from a (possibly gzipped) JSONL file.
-
-    Skips malformed lines rather than crashing -- public datasets occasionally
-    have a stray bad row, and we don't want one bad line to abort an ingest.
-    """
+    """Yield one parsed record per line; skip malformed lines rather than crashing."""
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as f:
-        for i, line in enumerate(f):
+        for line_number, line in enumerate(f):
             try:
                 yield json.loads(line)
             except json.JSONDecodeError:
-                log.warning("Skipping malformed line %d", i)
-                continue
+                log.warning("Skipping malformed line %d", line_number)
 
 
-def _is_usable(rec: dict) -> bool:
-    """Filter out records we can't analyze: missing rating or empty text."""
-    rating = rec.get("rating")
-    text = rec.get("text") or ""
-    return rating in (1.0, 2.0, 3.0, 4.0, 5.0) and len(text.strip()) >= 3
+def _is_usable(record: dict) -> bool:
+    rating = record.get("rating")
+    text = record.get("text") or ""
+    return rating in STAR_RATINGS and len(text.strip()) >= 3
 
 
 def stratified_sample(
@@ -50,58 +38,58 @@ def stratified_sample(
     sample_size: int,
     seed: int = 42,
 ) -> list[dict]:
-    """Reservoir-sample ``sample_size // 5`` records from each star rating.
+    """Draw ``sample_size // 5`` records from each star bucket using reservoir sampling.
 
-    Reservoir sampling lets us draw a uniform-random sample without ever
-    holding the full 2M-row file in memory, which keeps the ingest step
-    runnable on a laptop.
+    Reservoir sampling lets us pull a balanced sample in a single pass
+    without loading the full ~2M-row file into memory.
     """
     rng = random.Random(seed)
-    per_class = sample_size // 5
-    reservoirs: dict[float, list[dict]] = {r: [] for r in (1.0, 2.0, 3.0, 4.0, 5.0)}
-    seen: dict[float, int] = {r: 0 for r in reservoirs}
+    per_star = sample_size // 5
 
-    for rec in _stream_jsonl(path):
-        if not _is_usable(rec):
+    reservoir: dict[float, list[dict]] = {star: [] for star in STAR_RATINGS}
+    seen: dict[float, int] = {star: 0 for star in STAR_RATINGS}
+
+    for record in _stream_jsonl(path):
+        if not _is_usable(record):
             continue
-        r = rec["rating"]
-        bucket = reservoirs[r]
-        seen[r] += 1
-        # Standard Algorithm R: fill, then probabilistically replace.
-        if len(bucket) < per_class:
-            bucket.append(rec)
+        star = record["rating"]
+        bucket = reservoir[star]
+        seen[star] += 1
+        total = sum(seen.values())
+
+        # Algorithm R: fill the reservoir first, then replace slots at random.
+        if len(bucket) < per_star:
+            bucket.append(record)
         else:
-            j = rng.randint(0, seen[r] - 1)
-            if j < per_class:
-                bucket[j] = rec
+            slot = rng.randint(0, seen[star] - 1)
+            if slot < per_star:
+                bucket[slot] = record
 
-        if sum(seen.values()) % 250_000 == 0:
-            log.info("Streamed %s records...", f"{sum(seen.values()):,}")
+        if total % 250_000 == 0:
+            log.info("Streamed %s records...", f"{total:,}")
 
-    log.info(
-        "Stream complete. Per-rating counts seen: %s",
-        {k: f"{v:,}" for k, v in seen.items()},
-    )
-    sampled: list[dict] = []
-    for bucket in reservoirs.values():
-        sampled.extend(bucket)
-    rng.shuffle(sampled)
-    return sampled
+    log.info("Stream complete. Per-rating counts: %s", {k: f"{v:,}" for k, v in seen.items()})
+
+    samples: list[dict] = []
+    for bucket in reservoir.values():
+        samples.extend(bucket)
+    rng.shuffle(samples)
+    return samples
 
 
-def _normalize(rec: dict) -> dict:
-    """Light normalization: keep the fields the pipeline uses, coerce types."""
+def _normalize(record: dict) -> dict:
+    """Keep only the fields the pipeline uses and coerce types."""
     return {
-        "rating": float(rec["rating"]),
-        "title": (rec.get("title") or "").strip(),
-        "text": (rec.get("text") or "").strip(),
-        "asin": rec.get("asin", ""),
-        "parent_asin": rec.get("parent_asin", ""),
-        "user_id": rec.get("user_id", ""),
-        "timestamp": int(rec.get("timestamp", 0)),
-        "helpful_vote": int(rec.get("helpful_vote", 0)),
-        "verified_purchase": bool(rec.get("verified_purchase", False)),
-        "has_image": bool(rec.get("images")),
+        "rating": float(record["rating"]),
+        "title": (record.get("title") or "").strip(),
+        "text": (record.get("text") or "").strip(),
+        "asin": record.get("asin", ""),
+        "parent_asin": record.get("parent_asin", ""),
+        "user_id": record.get("user_id", ""),
+        "timestamp": int(record.get("timestamp", 0)),
+        "helpful_vote": int(record.get("helpful_vote", 0)),
+        "verified_purchase": bool(record.get("verified_purchase", False)),
+        "has_image": bool(record.get("images")),
     }
 
 
@@ -111,7 +99,7 @@ def ingest(
     seed: int | None = None,
     fresh: bool = True,
 ) -> int:
-    """Top-level ingest entry point. Returns count of inserted documents."""
+    """Run the full ingest pipeline and return the number of documents inserted."""
     path = path or config.RAW_DATA_FILE
     sample_size = sample_size or config.SAMPLE_SIZE
     seed = seed if seed is not None else config.RANDOM_SEED
@@ -119,8 +107,7 @@ def ingest(
     if not path.exists():
         raise FileNotFoundError(
             f"Raw data file not found: {path}. "
-            "Drop the Appliances_jsonl.gz file into ./data/ "
-            "(see README) and re-run."
+            "Drop the Appliances_jsonl.gz file into ./data/ and re-run."
         )
 
     log.info("Sampling up to %d reviews from %s (seed=%d)", sample_size, path, seed)
@@ -134,7 +121,7 @@ def ingest(
         store.drop()
     inserted = store.insert_many(docs)
     store.create_indexes()
-    log.info("Inserted %d documents into store (%s)", inserted, store.backend)
+    log.info("Inserted %d documents into MongoDB", inserted)
     return inserted
 
 

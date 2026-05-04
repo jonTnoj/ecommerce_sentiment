@@ -1,14 +1,4 @@
-"""
-Interactive dashboard.
-
-Loads the scored CSV produced by ``scripts/02_score.py`` and exposes
-filters (date range, star rating, polarity, aspect, verified flag) plus
-all of the visualizations from ``src.viz``. Reactive: every chart updates
-when you move a slider or toggle a checkbox.
-
-Run:
-    streamlit run dashboard/app.py
-"""
+"""Interactive Streamlit dashboard. Run: streamlit run dashboard/app.py"""
 from __future__ import annotations
 
 import json
@@ -31,9 +21,6 @@ st.set_page_config(
 )
 
 
-# --------------------------------------------------------------- data loader
-
-
 @st.cache_data(show_spinner="Loading scored reviews...")
 def load_data() -> pd.DataFrame:
     """Read the scored CSV. Cached so filter changes don't re-parse the file."""
@@ -53,9 +40,6 @@ def load_data() -> pd.DataFrame:
 
 df = load_data()
 
-
-# --------------------------------------------------------------- sidebar filters
-
 st.sidebar.title("Filters")
 
 min_date, max_date = df["date"].min(), df["date"].max()
@@ -66,9 +50,9 @@ date_range = st.sidebar.date_input(
     max_value=max_date,
 )
 if isinstance(date_range, tuple) and len(date_range) == 2:
-    start, end = date_range
+    start_date, end_date = date_range
 else:
-    start, end = min_date, max_date
+    start_date, end_date = min_date, max_date
 
 ratings = st.sidebar.multiselect(
     "Star rating",
@@ -90,30 +74,22 @@ aspect_filter = st.sidebar.multiselect(
 
 verified_only = st.sidebar.checkbox("Verified purchases only", value=False)
 
-
-# --------------------------------------------------------------- apply filters
-
 mask = (
-    (df["date"] >= start)
-    & (df["date"] <= end)
+    (df["date"] >= start_date)
+    & (df["date"] <= end_date)
     & (df["rating"].isin(ratings))
     & (df["predicted_polarity"].isin(polarities))
 )
 if verified_only:
     mask &= df["verified_purchase"]
 if aspect_filter:
-    mask &= df["aspects"].apply(
-        lambda al: any(a in al for a in aspect_filter)
-    )
+    mask &= df["aspects"].apply(lambda al: any(a in al for a in aspect_filter))
 
 filtered = df[mask].copy()
 
-
-# --------------------------------------------------------------- header
-
 st.title("📊 E-commerce Review Sentiment Dashboard")
 st.markdown(
-    "**Dataset:** Amazon Reviews 2023 -- Appliances category "
+    "**Dataset:** Amazon Reviews 2023 — Appliances category "
     "(McAuley Lab, UC San Diego)."
 )
 
@@ -134,12 +110,7 @@ if len(filtered) == 0:
     st.warning("No reviews match the current filter combination.")
     st.stop()
 
-
-# --------------------------------------------------------------- main charts
-
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Overview", "Model Agreement", "Aspects", "Drilldown"]
-)
+tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Model Agreement", "Aspects", "Drilldown"])
 
 with tab1:
     a, b = st.columns(2)
@@ -150,9 +121,8 @@ with tab1:
 
 with tab2:
     st.markdown(
-        "Two complementary framings of model performance. Reading the matrix "
-        "row-by-row tells you, of reviews whose star rating maps to *Actual=X*, "
-        "what fraction VADER assigned to each predicted polarity."
+        "Reading the matrix row-by-row: of reviews whose star rating maps to "
+        "*Actual=X*, what fraction did VADER assign to each predicted polarity?"
     )
     a, b = st.columns(2)
     a.plotly_chart(viz.fig_confusion_matrix(filtered), use_container_width=True)
@@ -179,21 +149,12 @@ with tab3:
 with tab4:
     st.markdown(
         "Sample of reviews matching the current filters. Useful for "
-        "spot-checking why VADER assigned the polarity it did, and what "
-        "real complaints look like in the data."
+        "spot-checking why VADER assigned the polarity it did."
     )
-    cols_to_show = [
-        "datetime",
-        "rating",
-        "predicted_polarity",
-        "compound",
-        "aspects",
-        "title",
-        "text",
-    ]
-    sample_n = st.slider("Rows", min_value=10, max_value=200, value=50, step=10)
+    cols = ["datetime", "rating", "predicted_polarity", "compound", "aspects", "title", "text"]
+    n = st.slider("Rows", min_value=10, max_value=200, value=50, step=10)
     st.dataframe(
-        filtered[cols_to_show].sample(min(sample_n, len(filtered)), random_state=0),
+        filtered[cols].sample(min(n, len(filtered)), random_state=0),
         use_container_width=True,
         height=520,
     )
@@ -202,5 +163,5 @@ st.markdown("---")
 st.caption(
     "Built for CS 210: Data Management for Data Science. "
     "Sentiment via VADER (Hutto & Gilbert, 2014). "
-    "Storage: MongoDB (with TinyDB fallback)."
+    "Storage: MongoDB."
 )
