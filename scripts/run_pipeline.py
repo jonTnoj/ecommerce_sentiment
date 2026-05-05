@@ -1,5 +1,6 @@
 """End-to-end runner: ingest -> score -> report. One command, in order."""
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,10 +16,6 @@ if __name__ == "__main__":
     print("\n=== Stage 2: score ===")
     analyze_run()
     print("\n=== Stage 3: build static report ===")
-    # Defer the import: stage 3 imports plotly.io which is not needed for 1+2.
-    from scripts import _make_report  # type: ignore[import-not-found]  # noqa
-    # Fall back to running the script directly if import path doesn't work.
-    import subprocess
     subprocess.run(
         [sys.executable, str(Path(__file__).parent / "03_report.py")], check=True
     )

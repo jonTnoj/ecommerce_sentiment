@@ -1,10 +1,6 @@
-"""
-Smoke tests for the pipeline. Runnable with `python -m pytest tests/`
-or by direct invocation: `python tests/test_smoke.py`.
+"""Smoke tests: catch broken imports, sentiment regressions, and silent data-loss bugs.
 
-These are unit-level sanity checks, not exhaustive coverage. The intent
-is to catch broken imports, regressions in the sentiment thresholds, and
-silent data-loss bugs in preprocessing.
+Runnable with `pytest tests/` or directly: `python tests/test_smoke.py`.
 """
 from __future__ import annotations
 
@@ -25,11 +21,11 @@ def test_clean_text_strips_html_and_urls():
 
 
 def test_clean_text_preserves_intensity_signals():
-    # VADER reads ALL CAPS and "!!!" as intensity; we must not strip them.
+    # VADER reads ALL-CAPS and "!!!" as intensity boosters — must not strip them.
     raw = "AMAZING product!!!"
-    out = preprocess.clean_text(raw)
-    assert "AMAZING" in out
-    assert "!!!" in out
+    cleaned = preprocess.clean_text(raw)
+    assert "AMAZING" in cleaned
+    assert "!!!" in cleaned
 
 
 def test_sentiment_polarity_thresholds():
@@ -59,18 +55,14 @@ def test_aspect_categorization():
     aspects = categorize.categorize(text)
     assert "Shipping & Packaging" in aspects
     assert "Product Quality" in aspects
-    # Either of these is acceptable -- "broke after a week" hits Durability too.
-    # Just confirm we got multiple aspects.
-    assert len(aspects) >= 2
+    assert len(aspects) >= 2  # "broke after a week" also hits Durability
 
 
 def test_aspect_no_false_positive():
-    text = "I really enjoy this!"  # no aspect keywords
-    assert categorize.categorize(text) == []
+    assert categorize.categorize("I really enjoy this!") == []
 
 
 if __name__ == "__main__":
-    # Run as plain script -- no pytest required.
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     failed = 0
     for t in tests:

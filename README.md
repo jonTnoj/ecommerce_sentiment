@@ -33,7 +33,7 @@ Citation:
 
 Download: <https://amazon-reviews-2023.github.io/>
 
-Place the file `Appliances_jsonl.gz` in `./data/` before running.
+Place the file `Appliances.jsonl.gz` in `./data/` before running.
 
 ## Setup
 
@@ -49,7 +49,7 @@ docker compose up -d
 # TinyDB (a pure-Python file-based document store).
 
 # 3. Drop the data file in place
-mv Appliances_jsonl.gz data/
+mv Appliances.jsonl.gz data/
 
 # 4. Run the pipeline
 python scripts/01_ingest.py     # ~30s for sampling + insert
@@ -71,8 +71,6 @@ python scripts/run_pipeline.py
 ```
 ecommerce_sentiment/
 ├── README.md
-├── PROPOSAL_MODIFICATIONS.md   ← changes from the original proposal
-├── REPORT_DRAFT.md             ← starting draft for the final writeup
 ├── requirements.txt
 ├── docker-compose.yml          ← one-command MongoDB
 ├── data/                       ← raw .jsonl.gz lives here (gitignored)
@@ -134,8 +132,6 @@ Indexes created (see `db.py::create_indexes`):
 * Single field `predicted_polarity` — for the polarity filter.
 
 ## Limitations
-
-These are spelled out in detail in `REPORT_DRAFT.md`. The short version:
 
 * **VADER is lexicon-based**, so it misses sarcasm and complex negation.
 * **Class imbalance** in the raw data (~70% 5-star) is masked by our
